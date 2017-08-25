@@ -733,6 +733,14 @@ class BalancedConsumer(object):
                 return False
             disp = (time.time() - self._last_message_time) * 1000.0
             return disp > self._consumer_timeout_ms
+
+        def non_blocking_message():
+            """Get one non blocking message from the consumer"""
+            # acquire the lock to ensure that we don't start trying to consume from
+            # a _consumer that might soon be replaced by an in-progress rebalance
+            with self._rebalancing_lock:
+                return self._consumer.consume(block=False)
+
         message = None
         self._last_message_time = time.time()
         while message is None and not consumer_timed_out():
@@ -741,10 +749,11 @@ class BalancedConsumer(object):
                 self._raise_worker_exceptions()
                 self._internal_consumer_running.wait(self._consumer_timeout_ms / 1000)
             try:
-                # acquire the lock to ensure that we don't start trying to consume from
-                # a _consumer that might soon be replaced by an in-progress rebalance
-                with self._rebalancing_lock:
-                    message = self._consumer.consume(block=block)
+                if block:
+                    while not message:
+                        message = non_blocking_message()
+                else:
+                    message = non_blocking_message()
             except (ConsumerStoppedException, AttributeError):
                 if not self._running:
                     raise ConsumerStoppedException
